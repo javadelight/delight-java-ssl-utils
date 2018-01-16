@@ -20,6 +20,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.KeyStore;
+import java.security.NoSuchAlgorithmException;
 import java.security.Security;
 
 import javax.net.ssl.KeyManagerFactory;
@@ -30,89 +31,84 @@ import mx.gwtutils.Base64Coder;
 
 public class SslContextFactory {
 
-    public static final String PROTOCOL = "TLS";
+	public static final String PROTOCOL = "TLS";
 
-    // <!-- one.download
-    // https://u1.linnk.it/qc8sbw/usr/apps/textsync/files/fragements-stream-to-string
-    // -->
-    public static String toString(final InputStream inputStream)
-            throws IOException {
-        final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        final byte[] buffer = new byte[1024];
-        int length = 0;
-        while ((length = inputStream.read(buffer)) != -1) {
-            baos.write(buffer, 0, length);
-        }
-        return new String(baos.toByteArray());
-    }
+	public static String toString(final InputStream inputStream) throws IOException {
+		final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		final byte[] buffer = new byte[1024];
+		int length = 0;
+		while ((length = inputStream.read(buffer)) != -1) {
+			baos.write(buffer, 0, length);
+		}
+		return new String(baos.toByteArray());
+	}
 
-    // <!-- one.end -->
+	public static KeyStore getKeyStore(SslKeyStoreData keyStoreData) {
 
-    public static SSLContext getServerContext(final SslKeyStoreData keyStoreData) {
+		if (keyStoreData.encoding().equals("CUSTOMBASE64")) {
+			try {
 
-        String algorithm = Security
-                .getProperty("ssl.KeyManagerFactory.algorithm");
-        if (algorithm == null) {
-            algorithm = "SunX509";
-        }
+				ByteArrayInputStream stream = new ByteArrayInputStream(
+						Base64Coder.decode(toString(keyStoreData.asInputStream())));
+				char[] password = keyStoreData.getKeyStorePassword();
 
-        SSLContext serverContext = null;
+				final KeyStore ks = KeyStore.getInstance("JKS");
 
-        if (keyStoreData.encoding().equals("CUSTOMBASE64")) {
-            try {
+				ks.load(stream, password);
+				return ks;
+			} catch (final Exception e) {
+				throw new RuntimeException(e);
+			}
+		} else
 
-                final KeyStore ks = KeyStore.getInstance("JKS");
-                ks.load(new ByteArrayInputStream(Base64Coder
-                        .decode(toString(keyStoreData.asInputStream()))),
-                        keyStoreData.getKeyStorePassword());
-                final KeyManagerFactory kmf = KeyManagerFactory
-                        .getInstance(algorithm);
-                kmf.init(ks, keyStoreData.getCertificatePassword());
+		if (keyStoreData.encoding().equals("BYTE")) {
+			try {
+				final KeyStore ks = KeyStore.getInstance("JKS");
+				ks.load(keyStoreData.asInputStream(), keyStoreData.getKeyStorePassword());
+				return ks;
+				// Set up key manager factory to use our key store
 
-                serverContext = SSLContext.getInstance(PROTOCOL);
-                serverContext.init(kmf.getKeyManagers(), null, null);
-            } catch (final Exception e) {
-                throw new RuntimeException(e);
-            }
-        } else
+			} catch (final Exception e) {
+				throw new Error("Failed to initialize the server-side SSLContext", e);
+			}
+		} else if (keyStoreData.encoding().equals("BASE64")) {
+			try {
 
-        if (keyStoreData.encoding().equals("BYTE")) {
-            try {
-                final KeyStore ks = KeyStore.getInstance("JKS");
-                ks.load(keyStoreData.asInputStream(),
-                        keyStoreData.getKeyStorePassword());
+				final KeyStore ks = KeyStore.getInstance("PKCS12");
+				ks.load(new ByteArrayInputStream(Base64Coder.decode(toString(keyStoreData.asInputStream()))),
+						keyStoreData.getKeyStorePassword());
+				return ks;
+			} catch (final Exception e) {
+				throw new RuntimeException(e);
+			}
+		} else {
+			throw new RuntimeException("Keystore Encoding not supported: " + keyStoreData.encoding());
+		}
+		
+	}
 
-                // Set up key manager factory to use our key store
-                final KeyManagerFactory kmf = KeyManagerFactory
-                        .getInstance(algorithm);
-                kmf.init(ks, keyStoreData.getCertificatePassword());
+	public static SSLContext getServerContext(final SslKeyStoreData keyStoreData) {
 
-                // Initialize the SSLContext to work with our key managers.
-                serverContext = SSLContext.getInstance(PROTOCOL);
-                serverContext.init(kmf.getKeyManagers(), null, null);
-            } catch (final Exception e) {
-                throw new Error(
-                        "Failed to initialize the server-side SSLContext", e);
-            }
-        } else if (keyStoreData.encoding().equals("BASE64")) {
-            try {
-                serverContext = SSLContext.getInstance("TLS");
-                final KeyStore ks = KeyStore.getInstance("PKCS12");
-                ks.load(new ByteArrayInputStream(Base64Coder
-                        .decode(toString(keyStoreData.asInputStream()))),
-                        keyStoreData.getKeyStorePassword());
-                final KeyManagerFactory kmf = KeyManagerFactory
-                        .getInstance(algorithm);
-                kmf.init(ks, keyStoreData.getCertificatePassword());
-                serverContext.init(kmf.getKeyManagers(), null, null);
-            } catch (final Exception e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            throw new RuntimeException("Keystore Encoding not supported: "
-                    + keyStoreData.encoding());
-        }
+		String algorithm = Security.getProperty("ssl.KeyManagerFactory.algorithm");
+		if (algorithm == null) {
+			algorithm = "SunX509";
+		}
 
-        return serverContext;
-    }
+		final KeyStore ks = getKeyStore(keyStoreData);
+		KeyManagerFactory kmf;
+		SSLContext serverContext = null;
+		try {
+			kmf = KeyManagerFactory.getInstance(algorithm);
+
+			kmf.init(ks, keyStoreData.getCertificatePassword());
+
+			serverContext = SSLContext.getInstance(PROTOCOL);
+			serverContext.init(kmf.getKeyManagers(), null, null);
+
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+		return serverContext;
+
+	}
 }
